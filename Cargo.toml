@@ -1,0 +1,10 @@
+[package]
+name = "mudbin"
+version = "0.1.0"
+authors = ["Topi Talvitie <topi.talvitie@iki.fi>"]
+edition = "2018"
+
+[dependencies]
+clap = "2.32.0"
+error-chain = "0.12.0"
+log = { version = "0.4.6", features = ["std"] }
