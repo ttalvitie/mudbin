@@ -1,5 +1,7 @@
+pub mod create_image;
 pub mod errors;
-
-mod create_image;
+pub mod prelude;
+pub mod qemu;
+pub mod util;
 
 pub use crate::create_image::create_image;

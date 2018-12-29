@@ -1,13 +1,17 @@
+use mudbin::prelude::*;
+
 use mudbin::create_image;
-use mudbin::errors::*;
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use clap::{Arg, ArgMatches, SubCommand};
 
 use error_chain::quick_main;
 
 use log;
+
+use tokio;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -49,9 +53,25 @@ impl StderrLogger {
     }
 }
 
-fn run_create(args: &ArgMatches) -> Result<()> {
+fn run_future(fut: BoxFuture<()>) -> Result<()> {
+    let result = Arc::new(Mutex::new(Some(Ok(()))));
+    let result2 = Arc::clone(&result);
+
+    let fut = fut.map_err(move |e| {
+        let mut result = result2.lock().unwrap();
+        *result = Some(Err(e));
+        ()
+    });
+    tokio::run(fut);
+
+    let mut result = result.lock().unwrap();
+    result.take().unwrap()
+}
+
+fn cmd_create(args: &ArgMatches) -> Result<()> {
     let output_path = Path::new(args.value_of_os("output").unwrap());
-    create_image(output_path)
+
+    run_future(create_image(output_path))
 }
 
 fn run() -> Result<()> {
@@ -95,7 +115,7 @@ fn run() -> Result<()> {
     StderrLogger::init(log_level_filter)?;
 
     if let Some(args) = args.subcommand_matches("create") {
-        run_create(args)?;
+        cmd_create(args)?;
     }
 
     Ok(())
