@@ -1,8 +1,30 @@
-use crate::errors::*;
+use mudbin::errors::*;
+use mudbin::create_image;
 
-use clap::Arg;
+use std::path::Path;
+
+use clap::{Arg, ArgMatches, SubCommand};
+
+use error_chain::quick_main;
 
 use log;
+
+const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
+trait DefaultArgs {
+    fn default_args(self) -> Self;
+}
+
+impl<'a, 'b> DefaultArgs for clap::App<'a, 'b> {
+    fn default_args(self) -> Self {
+        self.arg(
+            Arg::with_name("v")
+                .short("v")
+                .multiple(true)
+                .help("Increase level of verbosity of the stderr output (specify multiple to increase more)")
+        )
+    }
+}
 
 struct StderrLogger {
     level_filter: log::LevelFilter
@@ -32,22 +54,27 @@ impl StderrLogger {
     }
 }
 
-pub trait DefaultArgs {
-    fn default_args(self) -> Self;
+fn run_create(args: &ArgMatches) -> Result<()> {
+    let output_path = Path::new(args.value_of_os("output").unwrap());
+    create_image(output_path)
 }
 
-impl<'a, 'b> DefaultArgs for clap::App<'a, 'b> {
-    fn default_args(self) -> Self {
-        self.arg(
-            Arg::with_name("v")
-                .short("v")
-                .multiple(true)
-                .help("Increase level of verbosity of the stderr output (specify multiple to increase more)")
-        )
-    }
-} 
+fn run() -> Result<()> {
+    let args = clap::App::new("mudbin")
+        .version(VERSION)
+        .setting(clap::AppSettings::SubcommandRequired)
+        .setting(clap::AppSettings::GlobalVersion)
+        .subcommand(
+            SubCommand::with_name("create")
+                .about("Creates a new virtual machine root disk image")
+                .default_args()
+                .arg(
+                    Arg::with_name("output")
+                        .help("Path to the output image file")
+                        .required(true)
+                )
+        );
 
-pub fn run_with_args<F>(args: clap::App, run_command: F) -> Result<()> where F: FnOnce(clap::ArgMatches) -> Result<()> {
     let args = match args.get_matches_safe() {
         Err(e) => match e.kind {
             clap::ErrorKind::HelpDisplayed => {
@@ -72,6 +99,11 @@ pub fn run_with_args<F>(args: clap::App, run_command: F) -> Result<()> where F: 
     };
     StderrLogger::init(log_level_filter)?;
 
-    run_command(args)?;
+    if let Some(args) = args.subcommand_matches("create") {
+        run_create(args)?;
+    }
+
     Ok(())
 }
+
+quick_main!(run);
