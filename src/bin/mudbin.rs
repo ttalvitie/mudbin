@@ -1,5 +1,5 @@
-use mudbin::errors::*;
 use mudbin::create_image;
+use mudbin::errors::*;
 
 use std::path::Path;
 
@@ -17,17 +17,14 @@ trait DefaultArgs {
 
 impl<'a, 'b> DefaultArgs for clap::App<'a, 'b> {
     fn default_args(self) -> Self {
-        self.arg(
-            Arg::with_name("v")
-                .short("v")
-                .multiple(true)
-                .help("Increase level of verbosity of the stderr output (specify multiple to increase more)")
-        )
+        self.arg(Arg::with_name("v").short("v").multiple(true).help(
+            "Increase level of verbosity of the stderr output (specify multiple to increase more)",
+        ))
     }
 }
 
 struct StderrLogger {
-    level_filter: log::LevelFilter
+    level_filter: log::LevelFilter,
 }
 
 impl log::Log for StderrLogger {
@@ -46,10 +43,8 @@ impl log::Log for StderrLogger {
 
 impl StderrLogger {
     fn init(level_filter: log::LevelFilter) -> Result<()> {
-        log::set_boxed_logger(Box::new(StderrLogger{level_filter}))
-            .map(|()| {
-                log::set_max_level(level_filter)
-            })
+        log::set_boxed_logger(Box::new(StderrLogger { level_filter }))
+            .map(|()| log::set_max_level(level_filter))
             .chain_err(|| "Could not set up logger")
     }
 }
@@ -71,8 +66,8 @@ fn run() -> Result<()> {
                 .arg(
                     Arg::with_name("output")
                         .help("Path to the output image file")
-                        .required(true)
-                )
+                        .required(true),
+                ),
         );
 
     let args = match args.get_matches_safe() {
@@ -82,9 +77,9 @@ fn run() -> Result<()> {
                 return Ok(());
             }
             clap::ErrorKind::VersionDisplayed => return Ok(()),
-            _ => return Err(e).chain_err(|| "Parsing command line arguments failed")
+            _ => return Err(e).chain_err(|| "Parsing command line arguments failed"),
         },
-        Ok(args) => args
+        Ok(args) => args,
     };
 
     let mut verbosity = args.occurrences_of("v");
@@ -95,7 +90,7 @@ fn run() -> Result<()> {
         0 => log::LevelFilter::Warn,
         1 => log::LevelFilter::Info,
         2 => log::LevelFilter::Debug,
-        _ => log::LevelFilter::Trace
+        _ => log::LevelFilter::Trace,
     };
     StderrLogger::init(log_level_filter)?;
 
