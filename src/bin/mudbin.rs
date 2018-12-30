@@ -3,7 +3,6 @@ use mudbin::prelude::*;
 use mudbin::create_image;
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
 use clap::{Arg, ArgMatches, SubCommand};
 
@@ -11,7 +10,7 @@ use error_chain::quick_main;
 
 use log;
 
-use tokio;
+use tokio::runtime::current_thread::block_on_all;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -53,25 +52,10 @@ impl StderrLogger {
     }
 }
 
-fn run_future(fut: BoxFuture<()>) -> Result<()> {
-    let result = Arc::new(Mutex::new(Some(Ok(()))));
-    let result2 = Arc::clone(&result);
-
-    let fut = fut.map_err(move |e| {
-        let mut result = result2.lock().unwrap();
-        *result = Some(Err(e));
-        ()
-    });
-    tokio::run(fut);
-
-    let mut result = result.lock().unwrap();
-    result.take().unwrap()
-}
-
 fn cmd_create(args: &ArgMatches) -> Result<()> {
     let output_path = Path::new(args.value_of_os("output").unwrap());
 
-    run_future(create_image(output_path))
+    block_on_all(create_image(output_path))
 }
 
 fn run() -> Result<()> {

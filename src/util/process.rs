@@ -10,9 +10,13 @@ fn check_success(status: ExitStatus) -> Result<()> {
         Ok(())
     } else {
         match status.code() {
-            Some(code) => Err(format!("Child process returned failure exit status {}", code).into()),
+            Some(code) => {
+                Err(format!("Child process returned failure exit status {}", code).into())
+            }
             None => match status.signal() {
-                Some(signal) => Err(format!("Child process terminated by signal {}", signal).into()),
+                Some(signal) => {
+                    Err(format!("Child process terminated by signal {}", signal).into())
+                }
                 None => Err("Child process terminated unsuccessfully for unknown reason".into()),
             },
         }
