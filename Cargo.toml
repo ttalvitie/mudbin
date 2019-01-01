@@ -9,6 +9,6 @@ clap = "2.32.0"
 error-chain = "0.12.0"
 futures = "0.1.25"
 log = { version = "0.4.6", features = ["std"] }
-tempdir = "0.3.7"
+tempfile = "3.0.5"
 tokio = "0.1.13"
 tokio-process = "0.2.3"
