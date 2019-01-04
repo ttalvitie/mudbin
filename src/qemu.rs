@@ -2,6 +2,8 @@ use crate::prelude::*;
 use crate::util::process::ChildExt;
 
 use std::collections::{HashMap, HashSet};
+use std::fs::{create_dir, File};
+use std::io::Write;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -77,8 +79,9 @@ impl TempDirBuilder {
 }
 
 pub struct QemuConfig {
-    kernel: Option<(PathBuf, PathBuf)>,
+    kernel: Option<(PathBuf, PathBuf, String)>,
     vsports: HashSet<String>,
+    net: Option<Option<Vec<u8>>>,
 }
 
 impl QemuConfig {
@@ -86,6 +89,7 @@ impl QemuConfig {
         QemuConfig {
             kernel: None,
             vsports: HashSet::new(),
+            net: None,
         }
     }
 
@@ -93,10 +97,12 @@ impl QemuConfig {
         &mut self,
         kernel_path: P,
         initrd_path: Q,
+        append: &str,
     ) -> &mut QemuConfig {
         let kernel_path = kernel_path.as_ref().to_path_buf();
         let initrd_path = initrd_path.as_ref().to_path_buf();
-        self.kernel = Some((kernel_path, initrd_path));
+        let append = append.to_string();
+        self.kernel = Some((kernel_path, initrd_path, append));
         self
     }
 
@@ -111,6 +117,11 @@ impl QemuConfig {
         self
     }
 
+    pub fn network(&mut self, tftp_file: Option<Vec<u8>>) -> &mut QemuConfig {
+        self.net = Some(tftp_file);
+        self
+    }
+
     fn spawn_impl(&self) -> Result<BoxFuture<(Qemu, HashMap<String, UnixStream>)>> {
         let mut builder = TempDirBuilder::new()?;
 
@@ -122,7 +133,7 @@ impl QemuConfig {
         command.arg("-m").arg("1024");
         command.arg("-device").arg("virtio-serial");
 
-        if let &Some((ref kernel_path, ref initrd_path)) = &self.kernel {
+        if let &Some((ref kernel_path, ref initrd_path, ref append)) = &self.kernel {
             let kernel_link = builder
                 .link_path(kernel_path)
                 .chain_err(|| "Could not link kernel image to QEMU")?;
@@ -131,6 +142,23 @@ impl QemuConfig {
                 .chain_err(|| "Could not link initrd image to QEMU")?;
             command.arg("-kernel").arg(kernel_link);
             command.arg("-initrd").arg(initrd_link);
+            command.arg("-append").arg(append);
+        }
+
+        if let &Some(ref net) = &self.net {
+            command.arg("-net").arg("nic");
+            if let &Some(ref tftp_file) = net {
+                command.arg("-net").arg("user,tftp=tftp");
+                let tftp_dir = builder.workdir.path().join("tftp");
+                create_dir(&tftp_dir)
+                    .chain_err(|| "Could not create tftp directory in QEMU temporary directory")?;
+                File::create(tftp_dir.join("file"))
+                    .and_then(|mut file| file.write_all(tftp_file).map(move |()| file))
+                    .and_then(|file| file.sync_all())
+                    .chain_err(|| "Could not write file tftp/file in QEMU temporary directory")?;
+            } else {
+                command.arg("-net").arg("user");
+            }
         }
 
         let mut vsports = Vec::new();
