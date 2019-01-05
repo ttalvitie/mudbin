@@ -12,27 +12,15 @@ use tempfile::{tempdir, TempDir};
 
 use tokio::net::{UnixListener, UnixStream};
 
-use tokio_process::{Child, CommandExt};
+use tokio_process::{CommandExt};
 
 pub struct Qemu {
-    process: Child,
-    workdir: TempDir,
+    wait_child: BoxFuture<()>,
 }
 
 impl Qemu {
     pub fn wait(self) -> BoxFuture<()> {
-        let workdir = self.workdir;
-        self.process
-            .wait_success()
-            .chain_err(|| "Error in child QEMU process")
-            .and_then(move |()| {
-                future::result(
-                    workdir
-                        .close()
-                        .chain_err(|| "Closing temporary directory for QEMU failed"),
-                )
-            })
-            .into_box()
+        self.wait_child
     }
 }
 
@@ -186,21 +174,37 @@ impl QemuConfig {
             vsports.push(fut);
         }
 
-        let process = command
+        let workdir = builder.workdir;
+        let wait_child = command
             .spawn_async()
-            .chain_err(|| "Could not spawn child QEMU process")?;
-
-        let fut = future::join_all(vsports)
+            .chain_err(|| "Could not spawn child QEMU process")?
+            .wait_success()
+            .chain_err(|| "Error in child QEMU process")
+            .and_then(move |()| {
+                future::result(
+                    workdir
+                        .close()
+                        .chain_err(|| "Closing temporary directory for QEMU failed"),
+                )
+            })
+            .into_box();
+        
+        let init = future::join_all(vsports)
             .map(move |vsport_pairs| {
-                let qemu = Qemu {
-                    process,
-                    workdir: builder.workdir,
-                };
                 let mut vsports = HashMap::new();
                 for (name, stream) in vsport_pairs {
                     vsports.insert(name, stream);
                 }
-                (qemu, vsports)
+                vsports
+            });
+
+        let fut = init.select2(wait_child)
+            .map_err(|x| x.split().0)
+            .and_then(|x| {
+                match x {
+                    A((vsports, wait_child)) => future::ok((Qemu{wait_child}, vsports)),
+                    B(_) => future::err("QEMU child process exited during initialization".into())
+                }
             })
             .into_box();
         Ok(fut)
