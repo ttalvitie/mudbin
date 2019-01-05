@@ -12,7 +12,7 @@ use tempfile::{tempdir, TempDir};
 
 use tokio::net::{UnixListener, UnixStream};
 
-use tokio_process::{CommandExt};
+use tokio_process::CommandExt;
 
 pub struct Qemu {
     wait_child: BoxFuture<()>,
@@ -66,10 +66,43 @@ impl TempDirBuilder {
     }
 }
 
+struct NetConfig {
+    restrict: bool,
+    tftp_file: Option<Vec<u8>>,
+}
+
+impl NetConfig {
+    fn apply(&self, command: &mut Command, builder: &mut TempDirBuilder) -> Result<()> {
+        if !self.restrict || self.tftp_file.is_some() {
+            let restrict_arg = format!(",restrict={}", if self.restrict { "y" } else { "n" });
+
+            let mut tftp_arg = "";
+            if let &Some(ref tftp_file) = &self.tftp_file {
+                tftp_arg = ",tftp=tftp";
+
+                let tftp_dir = builder.workdir.path().join("tftp");
+                create_dir(&tftp_dir)
+                    .chain_err(|| "Could not create tftp directory in QEMU temporary directory")?;
+
+                File::create(tftp_dir.join("file"))
+                    .and_then(|mut file| file.write_all(tftp_file).map(move |()| file))
+                    .and_then(|file| file.sync_all())
+                    .chain_err(|| "Could not write file tftp/file in QEMU temporary directory")?;
+            }
+
+            command.arg("-net").arg("nic");
+            command
+                .arg("-net")
+                .arg(format!("user{}{}", restrict_arg, tftp_arg));
+        }
+        Ok(())
+    }
+}
+
 pub struct QemuConfig {
     kernel: Option<(PathBuf, PathBuf, String)>,
     vsports: HashSet<String>,
-    net: Option<Option<Vec<u8>>>,
+    net: NetConfig,
 }
 
 impl QemuConfig {
@@ -77,7 +110,10 @@ impl QemuConfig {
         QemuConfig {
             kernel: None,
             vsports: HashSet::new(),
-            net: None,
+            net: NetConfig {
+                restrict: true,
+                tftp_file: None,
+            },
         }
     }
 
@@ -103,8 +139,13 @@ impl QemuConfig {
         self
     }
 
-    pub fn network(&mut self, tftp_file: Option<Vec<u8>>) -> &mut QemuConfig {
-        self.net = Some(tftp_file);
+    pub fn unrestricted_net(&mut self) -> &mut QemuConfig {
+        self.net.restrict = false;
+        self
+    }
+
+    pub fn tftp_file(&mut self, tftp_file: Vec<u8>) -> &mut QemuConfig {
+        self.net.tftp_file = Some(tftp_file);
         self
     }
 
@@ -131,21 +172,7 @@ impl QemuConfig {
             command.arg("-append").arg(append);
         }
 
-        if let &Some(ref net) = &self.net {
-            command.arg("-net").arg("nic");
-            if let &Some(ref tftp_file) = net {
-                command.arg("-net").arg("user,tftp=tftp");
-                let tftp_dir = builder.workdir.path().join("tftp");
-                create_dir(&tftp_dir)
-                    .chain_err(|| "Could not create tftp directory in QEMU temporary directory")?;
-                File::create(tftp_dir.join("file"))
-                    .and_then(|mut file| file.write_all(tftp_file).map(move |()| file))
-                    .and_then(|file| file.sync_all())
-                    .chain_err(|| "Could not write file tftp/file in QEMU temporary directory")?;
-            } else {
-                command.arg("-net").arg("user");
-            }
-        }
+        self.net.apply(&mut command, &mut builder)?;
 
         let mut vsports = Vec::new();
         for name in &self.vsports {
@@ -188,23 +215,21 @@ impl QemuConfig {
                 )
             })
             .into_box();
-        
-        let init = future::join_all(vsports)
-            .map(move |vsport_pairs| {
-                let mut vsports = HashMap::new();
-                for (name, stream) in vsport_pairs {
-                    vsports.insert(name, stream);
-                }
-                vsports
-            });
 
-        let fut = init.select2(wait_child)
+        let init = future::join_all(vsports).map(move |vsport_pairs| {
+            let mut vsports = HashMap::new();
+            for (name, stream) in vsport_pairs {
+                vsports.insert(name, stream);
+            }
+            vsports
+        });
+
+        let fut = init
+            .select2(wait_child)
             .map_err(|x| x.split().0)
-            .and_then(|x| {
-                match x {
-                    A((vsports, wait_child)) => future::ok((Qemu{wait_child}, vsports)),
-                    B(_) => future::err("QEMU child process exited during initialization".into())
-                }
+            .and_then(|x| match x {
+                A((vsports, wait_child)) => future::ok((Qemu { wait_child }, vsports)),
+                B(_) => future::err("QEMU child process exited during initialization".into()),
             })
             .into_box();
         Ok(fut)

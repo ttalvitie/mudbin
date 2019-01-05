@@ -35,7 +35,8 @@ pub fn create_image(_output_path: &Path) -> BoxFuture<()> {
             "auto=true url=tftp://10.0.2.2/file hostname=mudbin domain=mudbin",
         )
         .vsport("log")
-        .network(Some(preseed))
+        .unrestricted_net()
+        .tftp_file(preseed)
         .spawn()
         .and_then(|(qemu, mut vsports)| {
             let log_port = FramedRead::new(vsports.remove("log").unwrap(), LinesCodec::new());
@@ -45,7 +46,7 @@ pub fn create_image(_output_path: &Path) -> BoxFuture<()> {
                         debug!("installer log: {}", line);
                         future::result(Ok(()))
                     })
-                    .map_err(|_| ())
+                    .map_err(|_| ()),
             );
             qemu.wait()
         })
