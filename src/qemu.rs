@@ -24,6 +24,24 @@ impl Qemu {
     }
 }
 
+pub fn create_disk_image<P: AsRef<Path>>(path: P) -> BoxFuture<()> {
+    let child_fut = future::result(
+        Command::new("qemu-img")
+            .arg("create")
+            .arg("-f")
+            .arg("qcow2")
+            .arg("--")
+            .arg(path.as_ref())
+            .arg("1T")
+            .spawn_async()
+            .chain_err(|| "Spawning qemu-img child process to create disk image failed"),
+    );
+    child_fut
+        .and_then(|child| child.wait_success())
+        .chain_err(|| "Creating disk image with qemu-img failed")
+        .into_box()
+}
+
 struct TempDirBuilder {
     workdir: TempDir,
     next_link_idx: u64,
@@ -81,16 +99,17 @@ impl NetConfig {
                 tftp_arg = ",tftp=tftp";
 
                 let tftp_dir = builder.workdir.path().join("tftp");
-                create_dir(&tftp_dir)
-                    .chain_err(|| "Could not create tftp directory in QEMU temporary directory")?;
+                create_dir(&tftp_dir).chain_err(|| {
+                    "Could not create directory 'tftp' in QEMU temporary directory"
+                })?;
 
                 File::create(tftp_dir.join("file"))
                     .and_then(|mut file| file.write_all(tftp_file).map(move |()| file))
                     .and_then(|file| file.sync_all())
-                    .chain_err(|| "Could not write file tftp/file in QEMU temporary directory")?;
+                    .chain_err(|| "Could not write file 'tftp/file' in QEMU temporary directory")?;
             }
 
-            command.arg("-net").arg("nic");
+            command.arg("-net").arg("nic,model=virtio");
             command
                 .arg("-net")
                 .arg(format!("user{}{}", restrict_arg, tftp_arg));
@@ -103,6 +122,7 @@ pub struct QemuConfig {
     kernel: Option<(PathBuf, PathBuf, String)>,
     vsports: HashSet<String>,
     net: NetConfig,
+    drives: Vec<(PathBuf, bool)>,
 }
 
 impl QemuConfig {
@@ -114,6 +134,7 @@ impl QemuConfig {
                 restrict: true,
                 tftp_file: None,
             },
+            drives: Vec::new(),
         }
     }
 
@@ -149,6 +170,11 @@ impl QemuConfig {
         self
     }
 
+    pub fn drive<P: AsRef<Path>>(&mut self, path: P, allow_write: bool) -> &mut QemuConfig {
+        self.drives.push((path.as_ref().to_path_buf(), allow_write));
+        self
+    }
+
     fn spawn_impl(&self) -> Result<BoxFuture<(Qemu, HashMap<String, UnixStream>)>> {
         let mut builder = TempDirBuilder::new()?;
 
@@ -171,8 +197,6 @@ impl QemuConfig {
             command.arg("-initrd").arg(initrd_link);
             command.arg("-append").arg(append);
         }
-
-        self.net.apply(&mut command, &mut builder)?;
 
         let mut vsports = Vec::new();
         for name in &self.vsports {
@@ -199,6 +223,21 @@ impl QemuConfig {
                 })
                 .map(move |stream| (name, stream));
             vsports.push(fut);
+        }
+
+        self.net.apply(&mut command, &mut builder)?;
+
+        for &(ref path, allow_write) in &self.drives {
+            let link = builder
+                .link_path(path)
+                .chain_err(|| "Could not link drive path to QEMU")?;
+
+            let mut readonly_arg = ",read-only";
+            if allow_write {
+                readonly_arg = "";
+            }
+            command.arg("-drive");
+            command.arg(format!("file={},if=virtio{}", link, readonly_arg));
         }
 
         let workdir = builder.workdir;
