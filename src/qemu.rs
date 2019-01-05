@@ -111,9 +111,7 @@ impl QemuConfig {
         if name.len() == 0 || name.len() > 64 || !name.chars().all(allowed_char) {
             panic!("Invalid virtual serial port name (must be 1-64 characters, allowed characters: ASCII-alphanumeric and '_-.')");
         }
-        if !self.vsports.insert(name.to_string()) {
-            panic!("Same virtual serial port name specified twice");
-        }
+        self.vsports.insert(name.to_string());
         self
     }
 

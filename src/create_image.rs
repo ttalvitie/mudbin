@@ -4,24 +4,29 @@ use crate::qemu::QemuConfig;
 
 use std::path::Path;
 
+use tokio::codec::{FramedRead, LinesCodec};
+use tokio::spawn;
+
+use log::debug;
+
 pub fn create_image(_output_path: &Path) -> BoxFuture<()> {
-    let preseed = Vec::from(
-        "d-i debian-installer/locale select en_US.UTF-8
-         d-i console-setup/ask_detect boolean false
-         d-i keyboard-configuration/layout select us
-         d-i keyboard-configuration/variant select us
-         d-i mirror/country string manual
-         d-i mirror/http/hostname string archive.ubuntu.com
-         d-i mirror/http/directory string /ubuntu
-         d-i mirror/http/proxy string
-         d-i passwd/user-fullname string user
-         d-i passwd/username string user
-         d-i passwd/user-password password insecure
-         d-i passwd/user-password-again password insecure
-         d-i clock-setup/utc boolean true
-         d-i time/zone string UTC
-         ",
-    );
+    let mut preseed = String::new();
+    preseed.push_str("d-i debian-installer/locale select en_US.UTF-8\n");
+    preseed.push_str("d-i console-setup/ask_detect boolean false\n");
+    preseed.push_str("d-i keyboard-configuration/layout select us\n");
+    preseed.push_str("d-i keyboard-configuration/variant select us\n");
+    preseed.push_str("d-i mirror/country string manual\n");
+    preseed.push_str("d-i mirror/http/hostname string archive.ubuntu.com\n");
+    preseed.push_str("d-i mirror/http/directory string /ubuntu\n");
+    preseed.push_str("d-i mirror/http/proxy string\n");
+    preseed.push_str("d-i passwd/user-fullname string user\n");
+    preseed.push_str("d-i passwd/username string user\n");
+    preseed.push_str("d-i passwd/user-password password insecure\n");
+    preseed.push_str("d-i passwd/user-password-again password insecure\n");
+    preseed.push_str("d-i clock-setup/utc boolean true\n");
+    preseed.push_str("d-i time/zone string UTC\n");
+    preseed.push_str("d-i preseed/early_command string tail -n0 -f /var/log/syslog > /dev/virtio-ports/mudbin.vsport.log &\n");
+    let preseed = Vec::from(preseed);
 
     QemuConfig::new()
         .boot_kernel(
@@ -29,9 +34,21 @@ pub fn create_image(_output_path: &Path) -> BoxFuture<()> {
             "../../preseedtest/initrd.gz",
             "auto=true url=tftp://10.0.2.2/file hostname=mudbin domain=mudbin",
         )
+        .vsport("log")
         .network(Some(preseed))
         .spawn()
-        .and_then(|(qemu, _)| qemu.wait())
+        .and_then(|(qemu, mut vsports)| {
+            let log_port = FramedRead::new(vsports.remove("log").unwrap(), LinesCodec::new());
+            spawn(
+                log_port
+                    .for_each(|line| {
+                        debug!("installer log: {}", line);
+                        future::result(Ok(()))
+                    })
+                    .map_err(|_| ())
+            );
+            qemu.wait()
+        })
         .map(|_| ())
         .into_box()
 }
