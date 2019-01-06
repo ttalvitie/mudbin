@@ -13,6 +13,7 @@ pub fn create_image<P: AsRef<Path>>(output_path: P) -> BoxFuture<()> {
     let output_path = output_path.as_ref().to_path_buf();
 
     let mut preseed = String::new();
+    preseed.push_str("d-i preseed/early_command string tail -n0 -f /var/log/syslog > /dev/virtio-ports/mudbin.vsport.log &\n");
     preseed.push_str("d-i debian-installer/locale select en_US.UTF-8\n");
     preseed.push_str("d-i console-setup/ask_detect boolean false\n");
     preseed.push_str("d-i keyboard-configuration/layout select us\n");
@@ -27,7 +28,24 @@ pub fn create_image<P: AsRef<Path>>(output_path: P) -> BoxFuture<()> {
     preseed.push_str("d-i passwd/user-password-again password insecure\n");
     preseed.push_str("d-i clock-setup/utc boolean true\n");
     preseed.push_str("d-i time/zone string UTC\n");
-    preseed.push_str("d-i preseed/early_command string tail -n0 -f /var/log/syslog > /dev/virtio-ports/mudbin.vsport.log &\n");
+    preseed.push_str("d-i partman-auto/disk string /dev/vda\n");
+    preseed.push_str("d-i partman-auto/method string regular\n");
+    preseed.push_str("d-i partman-auto/choose_recipe select atomic\n");
+    preseed.push_str("d-i partman/default_filesystem string ext4\n");
+    preseed.push_str("d-i partman-partitioning/confirm_write_new_label boolean true\n");
+    preseed.push_str("d-i partman/choose_partition select finish\n");
+    preseed.push_str("d-i partman/confirm boolean true\n");
+    preseed.push_str("d-i partman/confirm_nooverwrite boolean true\n");
+    preseed.push_str("d-i partman-swapfile/size string 0\n");
+    preseed.push_str("d-i base-installer/kernel/image string linux-virtual\n");
+    preseed.push_str("tasksel tasksel/first multiselect ");
+    preseed.push_str("d-i pkgsel/upgrade select safe-upgrade\n");
+    preseed.push_str("d-i pkgsel/update-policy select none\n");
+    preseed.push_str("d-i grub-installer/only_debian boolean true\n");
+    preseed.push_str("d-i grub-installer/with_other_os boolean true\n");
+    preseed.push_str("d-i grub-installer/bootdev string /dev/vda\n");
+    preseed.push_str("d-i finish-install/reboot_in_progress note\n");
+    preseed.push_str("d-i debian-installer/exit/poweroff boolean true\n");
     let preseed = Vec::from(preseed);
 
     create_disk_image(&output_path)
