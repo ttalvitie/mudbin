@@ -1,13 +1,15 @@
 use crate::prelude::*;
 
-use crate::qemu::{create_disk_image, QemuConfig};
+use crate::qemu::{create_disk_image, shrink_disk_image, QemuConfig};
 
 use std::path::Path;
+
+use tempfile::TempDir;
 
 use tokio::codec::{FramedRead, LinesCodec};
 use tokio::spawn;
 
-use log::debug;
+use log::{debug, info};
 
 pub fn create_image<P: AsRef<Path>>(output_path: P) -> BoxFuture<()> {
     let output_path = output_path.as_ref().to_path_buf();
@@ -44,12 +46,19 @@ pub fn create_image<P: AsRef<Path>>(output_path: P) -> BoxFuture<()> {
     preseed.push_str("d-i grub-installer/only_debian boolean true\n");
     preseed.push_str("d-i grub-installer/with_other_os boolean true\n");
     preseed.push_str("d-i grub-installer/bootdev string /dev/vda\n");
+    preseed.push_str("d-i preseed/late_command string in-target apt-get clean ; in-target fstrim -a\n");
     preseed.push_str("d-i finish-install/reboot_in_progress note\n");
     preseed.push_str("d-i debian-installer/exit/poweroff boolean true\n");
     let preseed = Vec::from(preseed);
 
-    create_disk_image(&output_path)
-        .and_then(move |()| {
+    future::result(TempDir::new())
+        .chain_err(|| "Creating temporary directory for disk image failed")
+        .and_then(move |tmp_dir| {
+            info!("Creating disk image");
+            create_disk_image(tmp_dir.path().join("image")).map(move |()| tmp_dir)
+        })
+        .and_then(|tmp_dir| {
+            info!("Starting installer in QEMU");
             QemuConfig::new()
                 .boot_kernel(
                     "../../preseedtest/linux",
@@ -59,10 +68,11 @@ pub fn create_image<P: AsRef<Path>>(output_path: P) -> BoxFuture<()> {
                 .vsport("log")
                 .unrestricted_net()
                 .tftp_file(preseed)
-                .drive(output_path, true)
+                .drive(tmp_dir.path().join("image"), true)
                 .spawn()
+                .map(move |(qemu, vsports)| (qemu, vsports, tmp_dir))
         })
-        .and_then(|(qemu, mut vsports)| {
+        .and_then(|(qemu, mut vsports, tmp_dir)| {
             let log_port = FramedRead::new(vsports.remove("log").unwrap(), LinesCodec::new());
             spawn(
                 log_port
@@ -72,8 +82,15 @@ pub fn create_image<P: AsRef<Path>>(output_path: P) -> BoxFuture<()> {
                     })
                     .map_err(|_| ()),
             );
-            qemu.wait()
+            qemu.wait().map(move |()| tmp_dir)
         })
-        .map(|_| ())
+        .and_then(move |tmp_dir| {
+            info!("Shrinking disk image");
+            shrink_disk_image(tmp_dir.path().join("image"), output_path)
+                .map(move |()| drop(tmp_dir))
+        })
+        .map(|()| {
+            info!("Installation complete");
+        })
         .into_box()
 }

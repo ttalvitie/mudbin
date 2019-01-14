@@ -42,6 +42,26 @@ pub fn create_disk_image<P: AsRef<Path>>(path: P) -> BoxFuture<()> {
         .into_box()
 }
 
+pub fn shrink_disk_image<A: AsRef<Path>, B: AsRef<Path>>(src: A, dest: B) -> BoxFuture<()> {
+    let child_fut = future::result(
+        Command::new("qemu-img")
+            .arg("convert")
+            .arg("-f")
+            .arg("qcow2")
+            .arg("-O")
+            .arg("qcow2")
+            .arg("--")
+            .arg(src.as_ref())
+            .arg(dest.as_ref())
+            .spawn_async()
+            .chain_err(|| "Spawning qemu-img child process to shrink disk image failed"),
+    );
+    child_fut
+        .and_then(|child| child.wait_success())
+        .chain_err(|| "Shrinking disk image with qemu-img failed")
+        .into_box()
+}
+
 struct TempDirBuilder {
     workdir: TempDir,
     next_link_idx: u64,
